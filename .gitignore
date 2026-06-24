@@ -1,0 +1,17 @@
+# 数据文件目录
+2.asc/
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# PyTorch 模型文件
+*.pth
+
+# Claude Code
+.claude/
+
+# IDE 配置
+.idea/
+.vscode/
