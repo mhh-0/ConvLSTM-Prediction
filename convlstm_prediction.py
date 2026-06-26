@@ -12,6 +12,8 @@ convlstm_prediction.py
 """
 
 import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+
 import re
 import numpy as np
 import matplotlib.pyplot as plt
@@ -170,128 +172,9 @@ def build_prediction_labels(file_paths: list, num_pred: int) -> list:
 
 
 # =====================================
-# 7. 诊断面板（先弹出）
+# 7. 构建时间轴帧数据（三通道）
 # =====================================
-def plot_diagnostic_dashboard(
-    true_all: np.ndarray,       # (T, H, W)
-    val_pred: np.ndarray,       # (V, H, W)
-    val_target: np.ndarray,     # (V, H, W)
-    auto_pred: np.ndarray,      # (P, H, W)
-    input_steps: int,
-    file_labels: list,
-):
-    """弹出诊断面板。"""
-    T = len(true_all)
-    V = len(val_pred)
-    P = len(auto_pred)
-
-    val_mae = np.abs(val_pred - val_target).mean(axis=(1, 2))
-    val_mae_overall = val_mae.mean()
-
-    auto_means = auto_pred.mean(axis=(1, 2))
-    auto_mins  = auto_pred.min(axis=(1, 2))
-    auto_maxs  = auto_pred.max(axis=(1, 2))
-    auto_stds  = auto_pred.std(axis=(1, 2))
-
-    seed_means = true_all[-input_steps:].mean(axis=(1, 2))
-    all_means  = true_all.mean(axis=(1, 2))
-    all_mins   = true_all.min(axis=(1, 2))
-    all_maxs   = true_all.max(axis=(1, 2))
-
-    fig = plt.figure(figsize=(18, 12), dpi=120)
-
-    # ---- 全时间线值域 ----
-    ax1 = fig.add_subplot(2, 3, (1, 2))
-    ax1.fill_between(range(T), all_mins, all_maxs, alpha=0.2, color='green', label='Actual range')
-    ax1.plot(range(T), all_means, 'g-', linewidth=2, label='Actual mean')
-    ax1.axvline(T - input_steps, color='gray', linestyle='--', alpha=0.7, label='Seed start')
-
-    ar_x = np.arange(T, T + P)
-    ax1.fill_between(ar_x, auto_mins, auto_maxs, alpha=0.2, color='red', label='AutoReg range')
-    ax1.plot(ar_x, auto_means, 'r-', linewidth=2, label='AutoReg mean')
-    ax1.axvline(T, color='red', linestyle=':', alpha=0.7, label='Prediction start')
-
-    ax1.set_xlabel("Time Step Index")
-    ax1.set_ylabel("Velocity")
-    ax1.set_title("Value Range Drift: Actual vs Autoregressive Prediction", fontsize=13, fontweight='bold')
-    ax1.legend(loc='upper right', fontsize=8)
-    ax1.grid(True, alpha=0.3)
-
-    # ---- 验证集单步 MAE ----
-    ax2 = fig.add_subplot(2, 3, 3)
-    val_indices = np.arange(input_steps, T)
-    colors = ['darkgreen' if i < T * 0.8 else 'darkblue' for i in val_indices]
-    _ = ax2.bar(range(V), val_mae, color=colors, edgecolor='white')
-    ax2.axhline(val_mae_overall, color='red', linestyle='--', linewidth=2,
-                label=f'Mean MAE = {val_mae_overall:.4f}')
-    ax2.set_xlabel("Validation Sample Index")
-    ax2.set_ylabel("MAE")
-    ax2.set_title("Single-Step MAE (no accumulation)", fontsize=11, fontweight='bold')
-    ax2.legend(fontsize=8)
-    ax2.grid(True, alpha=0.3, axis='y')
-
-    # ---- 值域漂移 ----
-    ax3 = fig.add_subplot(2, 3, 4)
-    steps = np.arange(1, P + 1)
-    ax3.plot(steps, auto_means, 'b-o', markersize=4, linewidth=2, label='AutoReg Mean')
-    ax3.fill_between(steps, auto_mins, auto_maxs, alpha=0.15, color='blue')
-    ax3.axhline(seed_means[-1], color='green', linestyle='--', linewidth=1.5,
-                label=f'Last seed mean = {seed_means[-1]:.4f}')
-    ax3.axhline(all_means.mean(), color='gray', linestyle=':', linewidth=1.5,
-                label=f'Global mean = {all_means.mean():.4f}')
-    if P >= 2:
-        drift_start = auto_means[:5].mean()
-        drift_end = auto_means[-5:].mean()
-        drift_pct = (drift_end - drift_start) / (abs(drift_start) + 1e-8) * 100
-        ax3.text(0.5, 0.05, f'Drift: {drift_pct:+.1f}% over {P} steps',
-                 transform=ax3.transAxes, fontsize=12, color='red',
-                 ha='center', fontweight='bold')
-    ax3.set_xlabel("Prediction Step")
-    ax3.set_ylabel("Velocity")
-    ax3.set_title("Autoregressive Value Drift", fontsize=12, fontweight='bold')
-    ax3.legend(fontsize=8)
-    ax3.grid(True, alpha=0.3)
-
-    # ---- 标准差漂移 ----
-    ax4 = fig.add_subplot(2, 3, 5)
-    ax4.plot(steps, auto_stds, 'r-o', markersize=4, linewidth=2, label='AutoReg Std')
-    seed_std = true_all[-input_steps:].std(axis=(1, 2))
-    ax4.axhline(seed_std.mean(), color='green', linestyle='--', linewidth=1.5,
-                label=f'Seed mean std = {seed_std.mean():.4f}')
-    ax4.axhline(true_all.std(axis=(1, 2)).mean(), color='gray', linestyle=':', linewidth=1.5,
-                label=f'Global mean std = {true_all.std(axis=(1,2)).mean():.4f}')
-    ax4.set_xlabel("Prediction Step")
-    ax4.set_ylabel("Spatial Std")
-    ax4.set_title("Spatial Variability Drift", fontsize=12, fontweight='bold')
-    ax4.legend(fontsize=8)
-    ax4.grid(True, alpha=0.3)
-
-    # ---- 最佳/最差样本 ----
-    ax5 = fig.add_subplot(2, 3, 6)
-    best_idx = int(np.argmin(val_mae))
-    worst_idx = int(np.argmax(val_mae))
-    ax5.barh(['Best', 'Worst'], [val_mae[best_idx], val_mae[worst_idx]],
-             color=['darkgreen', 'darkred'], edgecolor='white', height=0.5)
-    ax5.set_xlabel("MAE")
-    ax5.set_title(f"Best vs Worst Single-Step\n"
-                  f"Best:  t={best_idx + input_steps}  "
-                  f"({file_labels[best_idx + input_steps][:30]}...)\n"
-                  f"Worst: t={worst_idx + input_steps}  "
-                  f"({file_labels[worst_idx + input_steps][:30]}...)",
-                  fontsize=8)
-    for i, v in enumerate([val_mae[best_idx], val_mae[worst_idx]]):
-        ax5.text(v + 0.001, i, f'{v:.4f}', va='center', fontweight='bold')
-    ax5.grid(True, alpha=0.3, axis='x')
-
-    plt.suptitle("ConvLSTM Prediction Diagnostic Dashboard", fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.show()
-
-
-# =====================================
-# 8. 构建交叉排列的帧列表
-# =====================================
-def build_interleaved_frames(
+def build_timeline_data(
     true_frames: np.ndarray,        # (T, H, W)
     val_pred_frames: np.ndarray,    # (V, H, W)
     val_target_frames: np.ndarray,  # (V, H, W)
@@ -299,156 +182,158 @@ def build_interleaved_frames(
     true_labels: list,              # [str] * T
     pred_labels: list,              # [str] * P
     input_steps: int,
-    val_mae: np.ndarray,            # (V,)
 ) -> tuple:
     """
-    构建交叉排列的帧序列:
-
-      [t0..t7 真实]  (t8 真实, t8 预测), (t9 真实, t9 预测), ...  [自回归预测...]
+    按时间索引构建三通道帧数据。
 
     Returns
     -------
-    frames     : list of (H, W) arrays
-    frame_info : list of dicts with keys: type, label, color, mae, target
+    real_frames  : list of (H,W) or None   — None = 无真实值（自回归段）
+    pred_frames  : list of (H,W) or None   — None = 无预测（种子段）
+    error_frames : list of (H,W) or None
+    labels       : list of str
+    frame_types  : list of str  — 'Seed' | 'Actual+Pred' | 'AutoReg'
     """
-    V = len(val_pred_frames)
+    T = len(true_frames)
     P = len(auto_pred_frames)
 
-    frames = []
-    frame_info = []
+    real_frames = []
+    pred_frames = []
+    error_frames = []
+    labels = []
+    frame_types = []
 
-    # ---- 1. 种子窗口：前 input_steps 帧真实（无对应预测） ----
-    for i in range(input_steps):
-        frames.append(true_frames[i])
-        frame_info.append({
-            'type': 'ACTUAL (Seed)', 'label': true_labels[i],
-            'color': 'darkblue', 'mae': None, 'target': None,
-            'true_idx': i,
-        })
+    # ---- t = 0 .. T-1: 真实数据段 ----
+    for t in range(T):
+        real_frames.append(true_frames[t])
+        labels.append(true_labels[t])
 
-    # ---- 2. 交叉排列：tᵢ 真实 → tᵢ 预测（i = input_steps .. T-1） ----
-    for vi in range(V):
-        ti = vi + input_steps  # 在 true_frames 中的索引
+        if t < input_steps:
+            # 种子窗口：仅有真实帧，无预测
+            pred_frames.append(None)
+            error_frames.append(None)
+            frame_types.append('Seed')
+        else:
+            vi = t - input_steps
+            pred_frames.append(val_pred_frames[vi])
+            error_frames.append(np.abs(val_pred_frames[vi] - val_target_frames[vi]))
+            frame_types.append('Actual+Pred')
 
-        # 真实帧
-        frames.append(true_frames[ti])
-        frame_info.append({
-            'type': 'ACTUAL',
-            'label': true_labels[ti],
-            'color': 'darkgreen',
-            'mae': val_mae[vi],
-            'target': val_pred_frames[vi],    # 存储对应预测，用于显示对比
-            'true_idx': ti,
-        })
-
-        # 单步预测帧
-        frames.append(val_pred_frames[vi])
-        frame_info.append({
-            'type': 'SINGLE-STEP PRED',
-            'label': f"pred <- {true_labels[ti]}",
-            'color': 'darkorange',
-            'mae': val_mae[vi],
-            'target': val_target_frames[vi],  # 存储真实目标，用于 Tab 切换
-            'true_idx': ti,
-        })
-
-    # ---- 3. 自回归预测 ----
+    # ---- t = T .. T+P-1: 自回归预测段 ----
     for ai in range(P):
-        frames.append(auto_pred_frames[ai])
-        frame_info.append({
-            'type': 'AUTOREGRESSIVE',
-            'label': pred_labels[ai],
-            'color': 'darkred',
-            'mae': None,
-            'target': None,
-            'true_idx': None,
-        })
+        real_frames.append(None)            # 无真实值
+        pred_frames.append(auto_pred_frames[ai])
+        error_frames.append(None)           # 无误差（无真实值可对比）
+        labels.append(pred_labels[ai])
+        frame_types.append('AutoReg')
 
-    return frames, frame_info
+    return real_frames, pred_frames, error_frames, labels, frame_types
 
 
 # =====================================
-# 9. 可拖动时间轴流场浏览器
+# 8. 三面板流场浏览器
 # =====================================
-class FlowFieldViewer:
+class TriplePanelViewer:
     """
-    交互式流场查看器 —— 真实帧和预测帧交叉排列，用颜色区分。
-    按 Tab 可在单步预测帧上切换 预测/目标 显示。
+    三面板流场浏览器 —— 真实帧 | 预测帧 | 误差场，共用一个时间轴。
+    自回归阶段（无真实值）时，真实帧和误差场冻结在最后可用值。
     """
 
     def __init__(
         self,
-        frames: list,            # [(H, W), ...]
-        frame_info: list,        # [{type, label, color, mae, target}, ...]
+        real_frames: list,       # [(H,W) or None, ...]
+        pred_frames: list,       # [(H,W) or None, ...]
+        error_frames: list,      # [(H,W) or None, ...]
+        labels: list,            # [str, ...]
+        frame_types: list,       # ['Seed' | 'Actual+Pred' | 'AutoReg', ...]
         grid_x: np.ndarray,
         grid_y: np.ndarray,
-        title: str = "ConvLSTM Flow Field Prediction",
     ):
-        self.frames = frames
-        self.frame_info = frame_info
-        self.num_total = len(frames)
+        self.real_frames = real_frames
+        self.pred_frames = pred_frames
+        self.error_frames = error_frames
+        self.labels = labels
+        self.frame_types = frame_types
+        self.num_total = len(labels)
         self.grid_x = grid_x
         self.grid_y = grid_y
-        self.base_title = title
 
-        # 全局颜色范围
-        all_data = np.stack(frames, axis=0)
-        self.vmin = all_data.min()
-        self.vmax = all_data.max()
+        # ---- 共享颜色轴范围：基于真实帧+单步预测帧（排除自回归段） ----
+        all_valid = []
+        for i, f in enumerate(real_frames):
+            if f is not None and self.frame_types[i] != 'AutoReg':
+                all_valid.append(f.flatten())
+        for i, f in enumerate(pred_frames):
+            if f is not None and self.frame_types[i] != 'AutoReg':
+                all_valid.append(f.flatten())
+        if all_valid:
+            all_cat = np.concatenate(all_valid)
+            self.vmin_shared = float(all_cat.min())
+            self.vmax_shared = float(all_cat.max())
+        else:
+            self.vmin_shared, self.vmax_shared = 0.0, 1.0
 
-        # 对单步预测帧，维护 "显示预测" 还是 "显示目标" 的状态
-        self.show_target = {}   # frame_idx -> bool
+        # ---- 误差颜色轴范围 ----
+        err_all = []
+        for f in error_frames:
+            if f is not None:
+                err_all.append(f.flatten())
+        if err_all:
+            err_cat = np.concatenate(err_all)
+            self.vmin_err = float(err_cat.min())
+            self.vmax_err = float(err_cat.max())
+        else:
+            self.vmin_err, self.vmax_err = 0.0, 1.0
 
-        # 创建图形
-        self.fig = plt.figure(figsize=(16, 11), dpi=120)
+        # ---- 记录最后可用的真实帧和误差帧（自回归段冻结用） ----
+        self._last_real = None
+        self._last_error = None
+        for f in real_frames:
+            if f is not None:
+                self._last_real = f.copy()
+        for f in error_frames:
+            if f is not None:
+                self._last_error = f.copy()
 
-        # 默认跳到第一对（真实 + 预测），即 input_steps 位置
+        # ---- 创建图形 ----
+        self.fig = plt.figure(figsize=(20, 12), dpi=120)
         self.current_idx = 0
         self._setup_ui()
-
         self.fig.canvas.mpl_connect("key_press_event", self._on_key)
-        self._update_frame(self.current_idx)
-
-    # ------------------------------------------------------------------
-    def _get_display_data(self, idx: int):
-        """
-        返回实际要显示的 (field, info)。
-
-        对单步预测帧，如果 show_target[idx] == True，显示 target 而非 pred。
-        """
-        info = self.frame_info[idx].copy()
-
-        if info['type'] == 'SINGLE-STEP PRED' and self.show_target.get(idx, False):
-            field = info['target']   # 显示真实目标
-            info['type'] = 'VAL TARGET'
-            info['color'] = 'darkblue'
-            info['label'] = f"target <- {info['label'].replace('pred <- ', '')}"
-        else:
-            field = self.frames[idx]
-
-        return field, info
+        self._update_frame(0)
 
     # ------------------------------------------------------------------
     def _setup_ui(self):
-        """搭建布局：主流场 + 误差/梯度图 + 统计面板 + 滑块 + 信息栏。"""
-        # 主图
-        self.ax_field = self.fig.add_axes([0.06, 0.18, 0.60, 0.72])
-        self.ax_field.set_aspect("equal")
-        self.ax_field.set_xlabel("X")
-        self.ax_field.set_ylabel("Y")
+        """三面板 + 颜色条 + 时间轴 + 滑块布局。"""
+        plot_l, plot_w = 0.06, 0.73
+        plot_h = 0.26
+        cbar_l, cbar_w = 0.81, 0.015
 
-        # 右侧上图：误差/梯度
-        self.ax_aux = self.fig.add_axes([0.70, 0.45, 0.28, 0.45])
-        self.ax_aux.set_aspect("equal")
-        self.ax_aux.set_xlabel("X")
-        self.ax_aux.set_ylabel("Y")
+        # 三个主面板
+        self.ax_real = self.fig.add_axes([plot_l, 0.64, plot_w, plot_h])
+        self.ax_real.set_aspect("equal")
 
-        # 右侧下图：统计面板
-        self.ax_stats = self.fig.add_axes([0.70, 0.18, 0.28, 0.24])
-        self.ax_stats.axis("off")
+        self.ax_pred = self.fig.add_axes([plot_l, 0.36, plot_w, plot_h])
+        self.ax_pred.set_aspect("equal")
+
+        self.ax_error = self.fig.add_axes([plot_l, 0.08, plot_w, plot_h])
+        self.ax_error.set_aspect("equal")
+
+        # 共享颜色条（Real + Pred）
+        self.ax_cbar = self.fig.add_axes([cbar_l, 0.36, cbar_w, 0.54])
+
+        # 误差颜色条
+        self.ax_cbar_err = self.fig.add_axes([cbar_l, 0.08, cbar_w, 0.26])
+
+        # 时间轴颜色条
+        self.ax_timeline = self.fig.add_axes([0.06, 0.045, 0.88, 0.018])
+        self._draw_timeline()
+        self.timeline_line = self.ax_timeline.axvline(
+            x=0.5, color='white', linewidth=2.5, linestyle='-', zorder=5
+        )
 
         # 滑块
-        self.ax_slider = self.fig.add_axes([0.10, 0.06, 0.80, 0.04])
+        self.ax_slider = self.fig.add_axes([0.06, 0.01, 0.88, 0.025])
         self.slider = Slider(
             ax=self.ax_slider, label="Time Step",
             valmin=0, valmax=max(self.num_total - 1, 0),
@@ -457,7 +342,7 @@ class FlowFieldViewer:
         self.slider.on_changed(self._on_slider)
 
         # 信息栏
-        self.ax_info = self.fig.add_axes([0.10, 0.92, 0.80, 0.04])
+        self.ax_info = self.fig.add_axes([0.06, 0.925, 0.88, 0.035])
         self.ax_info.axis("off")
         self.info_text = self.ax_info.text(
             0.5, 0.5, "",
@@ -465,135 +350,168 @@ class FlowFieldViewer:
             ha="center", va="center", fontsize=9, fontweight="bold",
         )
 
-        self._cbar_main = None
-        self._cbar_aux = None
-
     # ------------------------------------------------------------------
     def _update_frame(self, idx: int):
-        """刷新所有面板。"""
+        """刷新三个面板。"""
         idx = int(np.clip(idx, 0, self.num_total - 1))
         self.current_idx = idx
 
-        field, info = self._get_display_data(idx)
+        real = self.real_frames[idx]
+        pred = self.pred_frames[idx]
+        error = self.error_frames[idx]
+        label = self.labels[idx]
+        ftype = self.frame_types[idx]
+
+        # 自回归段冻结处理
+        real_frozen = (real is None)
+        if real is None:
+            real = self._last_real
+        if error is None and pred is not None and real is not None:
+            # 自回归段有预测但无真实值：用冻结的 real 计算误差
+            error = np.abs(pred - real)
+        elif error is None:
+            error = self._last_error
+
         X2D, Y2D = np.meshgrid(self.grid_x, self.grid_y)
 
-        # ==== 主图 ====
-        self.ax_field.clear()
-        im = self.ax_field.pcolormesh(
-            X2D, Y2D, field,
-            cmap="jet", shading="gouraud", rasterized=True,
-            vmin=self.vmin, vmax=self.vmax,
-        )
-        if self._cbar_main:
-            self._cbar_main.remove()
-        self._cbar_main = self.fig.colorbar(im, ax=self.ax_field, label="Velocity")
-
-        self.ax_field.set_aspect("equal")
-        self.ax_field.set_xlabel("X")
-        self.ax_field.set_ylabel("Y")
-        self.ax_field.set_title(
-            f"[{info['type']}]\nFrame {idx} / {self.num_total - 1}",
-            fontsize=13, fontweight="bold", color=info['color'],
+        # ---- Panel 1: Real ----
+        self.ax_real.clear()
+        if real is not None:
+            self.ax_real.pcolormesh(
+                X2D, Y2D, real, cmap="jet",
+                shading="gouraud", rasterized=True,
+                vmin=self.vmin_shared, vmax=self.vmax_shared,
+            )
+        self.ax_real.set_aspect("equal")
+        self.ax_real.set_xlabel("X")
+        self.ax_real.set_ylabel("Y")
+        freeze_str = "  [FROZEN — no ground truth]" if real_frozen else ""
+        self.ax_real.set_title(
+            f"1. Real Velocity Field{freeze_str}",
+            fontsize=13, fontweight="bold", color="darkgreen",
         )
 
-        # ==== 右侧辅助图 ====
-        self.ax_aux.clear()
-
-        if info['type'] in ('SINGLE-STEP PRED', 'VAL TARGET'):
-            # 显示预测 vs 目标的误差场（取 mae/target 中存储的值）
-            # 此时 info['target'] 可能是 target（当 show_target=False）或 pred（当 show_target=True）
-            # 我们需要从原始 frame_info 中取对应的 pair
-            orig = self.frame_info[idx]
-            if orig['type'] == 'SINGLE-STEP PRED':
-                # pred vs target
-                pred_field = self.frames[idx]
-                target_field = orig['target']
-                error = np.abs(pred_field - target_field)
-            else:
-                # 已被 get_display_data 转为 VAL TARGET，则 target 存的是 pred
-                # 实际上 _get_display_data 处理了这个情况
-                # 从原始帧数据获取 pred
-                pred_field = self.frames[idx]
-                target_field = orig['target']
-                error = np.abs(pred_field - target_field)
-
-            im_aux = self.ax_aux.pcolormesh(
-                X2D, Y2D, error,
-                cmap="hot", shading="gouraud", rasterized=True,
+        # ---- Panel 2: Pred ----
+        self.ax_pred.clear()
+        if pred is not None:
+            self.ax_pred.pcolormesh(
+                X2D, Y2D, pred, cmap="jet",
+                shading="gouraud", rasterized=True,
+                vmin=self.vmin_shared, vmax=self.vmax_shared,
             )
-            if self._cbar_aux:
-                self._cbar_aux.remove()
-            self._cbar_aux = self.fig.colorbar(im_aux, ax=self.ax_aux, label="Absolute Error")
-            mae_val = orig.get('mae', np.nan)
-            self.ax_aux.set_title(
-                f"|Prediction - Target|\nMAE = {mae_val:.4f}",
-                fontsize=10, fontweight="bold", color="darkred",
-            )
+        self.ax_pred.set_aspect("equal")
+        self.ax_pred.set_xlabel("X")
+        self.ax_pred.set_ylabel("Y")
+        if ftype == 'AutoReg':
+            pred_title = "2. Autoregressive Predicted Velocity Field"
+            pred_color = "darkred"
+        elif ftype == 'Seed':
+            pred_title = "2. Predicted Velocity Field (no prediction yet)"
+            pred_color = "gray"
         else:
-            # 真实帧 / 自回归帧：显示空间梯度
-            gy, gx = np.gradient(field)
-            grad_mag = np.sqrt(gx**2 + gy**2)
-            im_aux = self.ax_aux.pcolormesh(
-                X2D, Y2D, grad_mag,
-                cmap="viridis", shading="gouraud", rasterized=True,
+            pred_title = "2. Predicted Velocity Field (single-step)"
+            pred_color = "darkorange"
+        self.ax_pred.set_title(pred_title, fontsize=13, fontweight="bold", color=pred_color)
+
+        # ---- Panel 3: Error ----
+        self.ax_error.clear()
+        if error is not None:
+            self.ax_error.pcolormesh(
+                X2D, Y2D, error, cmap="hot",
+                shading="gouraud", rasterized=True,
+                vmin=self.vmin_err, vmax=self.vmax_err,
             )
-            if self._cbar_aux:
-                self._cbar_aux.remove()
-            self._cbar_aux = self.fig.colorbar(im_aux, ax=self.ax_aux, label="Gradient Mag")
-            self.ax_aux.set_title(
-                "Spatial Gradient Magnitude",
-                fontsize=10, fontweight="bold", color=info['color'],
-            )
-
-        self.ax_aux.set_aspect("equal")
-        self.ax_aux.set_xlabel("X")
-        self.ax_aux.set_ylabel("Y")
-
-        # ==== 统计面板 ====
-        self.ax_stats.clear()
-        self.ax_stats.axis("off")
-
-        tab_hint = ""
-        if info['type'] in ('SINGLE-STEP PRED', 'VAL TARGET'):
-            tab_hint = "\n[Tab] Toggle Pred/Target\n"
-
-        stats = (
-            f"Frame:  {idx} / {self.num_total - 1}\n"
-            f"Type:   {info['type']}\n"
-            f"File:   {info['label']}\n"
-            f"{'─' * 30}\n"
-            f"Min:    {field.min():.4f}\n"
-            f"Max:    {field.max():.4f}\n"
-            f"Mean:   {field.mean():.4f}\n"
-            f"Std:    {field.std():.4f}\n"
-            f"{'─' * 30}\n"
-        )
-        if info.get('mae') is not None:
-            stats += f"MAE:    {info['mae']:.4f}\n"
-        stats += (
-            f"{tab_hint}"
-            f"[<- ->] Navigate\n"
-            f"[Home / End] Jump"
+        self.ax_error.set_aspect("equal")
+        self.ax_error.set_xlabel("X")
+        self.ax_error.set_ylabel("Y")
+        err_frozen = (self.error_frames[idx] is None and ftype == 'AutoReg')
+        err_str = "  [FROZEN — no ground truth]" if err_frozen else ""
+        mae_val = float(np.mean(error)) if error is not None else float('nan')
+        self.ax_error.set_title(
+            f"3. |Prediction − Real|  (mean = {mae_val:.4f}){err_str}",
+            fontsize=13, fontweight="bold", color="darkred",
         )
 
-        self.ax_stats.text(
-            0.05, 0.95, stats,
-            transform=self.ax_stats.transAxes,
-            fontsize=9, fontfamily='monospace',
-            va='top', ha='left',
-            bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5),
+        # ---- 共享颜色条 (Real + Pred) ----
+        self.ax_cbar.clear()
+        sm = plt.cm.ScalarMappable(
+            norm=plt.Normalize(vmin=self.vmin_shared, vmax=self.vmax_shared),
+            cmap="jet",
         )
+        sm.set_array([])
+        self.fig.colorbar(sm, cax=self.ax_cbar, label="Velocity")
 
-        # ==== 信息栏 ====
-        v_min, v_max, v_mean = field.min(), field.max(), field.mean()
-        mae_str = f"  |  MAE: {info['mae']:.4f}" if info.get('mae') is not None else ""
+        # ---- 误差颜色条 ----
+        self.ax_cbar_err.clear()
+        sm_err = plt.cm.ScalarMappable(
+            norm=plt.Normalize(vmin=self.vmin_err, vmax=self.vmax_err),
+            cmap="hot",
+        )
+        sm_err.set_array([])
+        self.fig.colorbar(sm_err, cax=self.ax_cbar_err, label="|Error|")
+
+        # ---- 信息栏 ----
+        real_min = f"{real.min():.4f}" if real is not None else "N/A"
+        real_max = f"{real.max():.4f}" if real is not None else "N/A"
+        pred_min = f"{pred.min():.4f}" if pred is not None else "N/A"
+        pred_max = f"{pred.max():.4f}" if pred is not None else "N/A"
         self.info_text.set_text(
-            f"[{info['type']}]  {info['label']}  |  "
-            f"Min: {v_min:.4f}  |  Max: {v_max:.4f}  |  Mean: {v_mean:.4f}{mae_str}"
+            f"Frame {idx}/{self.num_total - 1}  |  {ftype}  |  {label}  |  "
+            f"Real: [{real_min}, {real_max}]  |  Pred: [{pred_min}, {pred_max}]  |  "
+            f"MAE: {mae_val:.4f}"
         )
-        self.info_text.set_color(info['color'])
 
         self.fig.canvas.draw_idle()
+
+        # 更新时间轴位置标记
+        self.timeline_line.set_xdata([idx + 0.5, idx + 0.5])
+
+    # ------------------------------------------------------------------
+    def _draw_timeline(self):
+        """在滑块上方绘制颜色编码的时间轴条。"""
+        color_map = {
+            'Seed':        np.array([0.0, 0.0, 0.545]),    # darkblue
+            'Actual+Pred': np.array([0.0, 0.392, 0.0]),    # darkgreen
+            'AutoReg':     np.array([0.545, 0.0, 0.0]),    # darkred
+        }
+        img = np.zeros((1, self.num_total, 3))
+        for i, ft in enumerate(self.frame_types):
+            img[0, i] = color_map.get(ft, [0.5, 0.5, 0.5])
+        self.ax_timeline.imshow(img, aspect='auto', interpolation='nearest')
+        self.ax_timeline.set_yticks([])
+
+        # 分段文字标签
+        short_label = {
+            'Seed': 'Seed', 'Actual+Pred': 'Real + 1-Step Pred', 'AutoReg': 'AutoReg',
+        }
+        prev_type = None
+        seg_start = 0
+        for i, ft in enumerate(self.frame_types):
+            if ft != prev_type:
+                if prev_type is not None:
+                    mid = (seg_start + i) / 2
+                    self.ax_timeline.text(
+                        mid, 0, short_label.get(prev_type, '?'),
+                        ha='center', va='center', fontsize=6,
+                        color='white', fontweight='bold',
+                    )
+                seg_start = i
+                prev_type = ft
+        if prev_type is not None:
+            mid = (seg_start + self.num_total) / 2
+            self.ax_timeline.text(
+                mid, 0, short_label.get(prev_type, '?'),
+                ha='center', va='center', fontsize=6,
+                color='white', fontweight='bold',
+            )
+
+        # 段分隔线
+        prev_type2 = None
+        for i, ft in enumerate(self.frame_types):
+            if ft != prev_type2:
+                if i > 0:
+                    self.ax_timeline.axvline(x=i, color='white', linewidth=1, alpha=0.6)
+                prev_type2 = ft
 
     # ------------------------------------------------------------------
     def _on_slider(self, val):
@@ -613,13 +531,6 @@ class FlowFieldViewer:
         elif event.key == "end":
             self._update_frame(self.num_total - 1)
             self.slider.set_val(self.num_total - 1)
-        elif event.key == "tab":
-            info = self.frame_info[self.current_idx]
-            if info['type'] in ('SINGLE-STEP PRED', 'VAL TARGET'):
-                self.show_target[self.current_idx] = not self.show_target.get(
-                    self.current_idx, False
-                )
-                self._update_frame(self.current_idx)
 
     # ------------------------------------------------------------------
     def show(self):
@@ -627,15 +538,15 @@ class FlowFieldViewer:
 
 
 # =====================================
-# 10. 主流程
+# 9. 主流程
 # =====================================
 def main():
-    # ---- 10.1 加载模型 ----
+    # ---- 9.1 加载模型 ----
     model, mean, std, grid_x, grid_y, input_steps = load_trained_model(
         MODEL_SAVE_PATH, device
     )
 
-    # ---- 10.2 加载数据 ----
+    # ---- 9.2 加载数据 ----
     flow_scaled, mean_d, std_d, _, _ = prepare_prediction_data(FILE_PATHS, GRID_SIZE)
     if abs(mean - mean_d) > 1e-6 or abs(std - std_d) > 1e-6:
         print("\nWarning: checkpoint norm differs from current data. Using checkpoint.")
@@ -644,7 +555,7 @@ def main():
     all_true_frames = denormalize(flow_scaled[:, 0, :, :], mean, std)
     true_labels = [os.path.basename(fp) for fp in FILE_PATHS]
 
-    # ---- 10.3 单步预测 ----
+    # ---- 9.3 单步预测 ----
     print(f"\nSingle-step predictions on {T - input_steps} samples (teacher-forcing) ...")
     val_pred_scaled, val_target_scaled = single_step_predict(
         model=model, data_scaled=flow_scaled,
@@ -657,7 +568,7 @@ def main():
     print(f"Single-step MAE: mean={val_mae.mean():.4f}  "
           f"best={val_mae.min():.4f}  worst={val_mae.max():.4f}")
 
-    # ---- 10.4 自回归预测 ----
+    # ---- 9.4 自回归预测 ----
     num_auto = 50
     print(f"\nAutoregressive prediction: {num_auto} steps ...")
     seed_scaled = flow_scaled[-input_steps:]
@@ -672,17 +583,8 @@ def main():
 
     pred_labels = build_prediction_labels(FILE_PATHS, num_auto)
 
-    # ---- 10.5 诊断面板 ----
-    print("\n" + "=" * 60)
-    print("Diagnostic Dashboard (close to continue)")
-    print("=" * 60)
-    plot_diagnostic_dashboard(
-        true_all=all_true_frames, val_pred=val_pred, val_target=val_target,
-        auto_pred=auto_pred, input_steps=input_steps, file_labels=true_labels,
-    )
-
-    # ---- 10.6 构建交叉帧序列 ----
-    frames, frame_info = build_interleaved_frames(
+    # ---- 9.5 构建时间轴帧数据 ----
+    real_frames, pred_frames, error_frames, labels, frame_types = build_timeline_data(
         true_frames=all_true_frames,
         val_pred_frames=val_pred,
         val_target_frames=val_target,
@@ -690,22 +592,25 @@ def main():
         true_labels=true_labels,
         pred_labels=pred_labels,
         input_steps=input_steps,
-        val_mae=val_mae,
     )
 
-    total = len(frames)
-    n_auto = num_auto
-    n_pairs = T - input_steps
+    n_seed = input_steps
+    n_pred = T - input_steps
+    total = len(labels)
     print(f"\nFrame layout ({total} total):")
-    print(f"  0..{input_steps - 1}      : Seed window (actual, no pred)")
-    print(f"  {input_steps}..{input_steps + 2 * n_pairs - 1}  : Interleaved (actual, pred) x {n_pairs}")
-    print(f"  {input_steps + 2 * n_pairs}..{total - 1}  : Autoregressive x {n_auto}")
-    print("\nControls: <- -> navigate  |  Tab = toggle pred/target  |  Home/End = jump")
+    print(f"  0..{n_seed - 1}     : Seed window (real only, no prediction)")
+    print(f"  {n_seed}..{n_seed + n_pred - 1} : Real + single-step prediction + error")
+    print(f"  {n_seed + n_pred}..{total - 1} : Autoregressive prediction only")
+    print("\nControls:  <- -> navigate  |  Home/End jump")
 
-    viewer = FlowFieldViewer(
-        frames=frames, frame_info=frame_info,
-        grid_x=grid_x, grid_y=grid_y,
-        title="ConvLSTM Flow Field Prediction",
+    viewer = TriplePanelViewer(
+        real_frames=real_frames,
+        pred_frames=pred_frames,
+        error_frames=error_frames,
+        labels=labels,
+        frame_types=frame_types,
+        grid_x=grid_x,
+        grid_y=grid_y,
     )
     viewer.show()
 

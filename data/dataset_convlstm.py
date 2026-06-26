@@ -63,7 +63,7 @@ def load_all_data(file_paths):
             x_ref = df["x"].values
             y_ref = df["y"].values
 
-        velocity = df["mean_velocity"].values
+        velocity = df["velocity"].values
 
         all_velocity.append(velocity)
 

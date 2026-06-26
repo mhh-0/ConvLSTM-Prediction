@@ -12,7 +12,7 @@ FILE_PATHS = [
 # ConvLSTM 参数
 # =====================================
 
-INPUT_STEPS = 8
+INPUT_STEPS = 4
 
 HIDDEN_DIMS = [64, 128]   # 双层 ConvLSTM
 
@@ -37,9 +37,9 @@ TRAIN_RATIO = 0.8
 # 训练参数
 # =====================================
 
-BATCH_SIZE = 16            # RTX 5060 Ti 16GB
+BATCH_SIZE = 8            # RTX 5060 Ti 16GB
 
-EPOCHS = 120
+EPOCHS = 300
 
 LR = 1e-3
 
@@ -68,7 +68,7 @@ T_MULT = 2                  # 每轮周期倍增因子
 # 保存路径
 # =====================================
 
-MODEL_SAVE_PATH = "convlstm_flow_model2.pth"
+MODEL_SAVE_PATH = "convlstm_flow_model.pth"
 
 # 可视化输出
 RESULT_FIG_PATH = "convlstm_training_results.png"
