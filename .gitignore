@@ -1,5 +1,6 @@
 # 数据文件目录
 2.asc/
+0-4 new-dataset/
 
 # Python 缓存
 __pycache__/
@@ -15,3 +16,4 @@ __pycache__/
 # IDE 配置
 .idea/
 .vscode/
+

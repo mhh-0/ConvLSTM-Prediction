@@ -426,9 +426,20 @@ class TriplePanelViewer:
         self.ax_error.set_ylabel("Y")
         err_frozen = (self.error_frames[idx] is None and ftype == 'AutoReg')
         err_str = "  [FROZEN — no ground truth]" if err_frozen else ""
-        mae_val = float(np.mean(error)) if error is not None else float('nan')
+        if error is not None and real is not None:
+            mae_val = float(np.mean(error))
+            # 平均相对误差 (MRE)，排除 real=0 的点
+            nonzero_mask = np.abs(real) >= 1e-4
+            if nonzero_mask.any():
+                rel_err = np.abs(error[nonzero_mask] / real[nonzero_mask])
+                mre_val = float(np.mean(rel_err)) * 100
+            else:
+                mre_val = float('nan')
+        else:
+            mae_val = float('nan')
+            mre_val = float('nan')
         self.ax_error.set_title(
-            f"3. |Prediction − Real|  (mean = {mae_val:.4f}){err_str}",
+            f"3. |Prediction − Real|  (MAE = {mae_val:.4f}, MRE = {mre_val:.2f}%){err_str}",
             fontsize=13, fontweight="bold", color="darkred",
         )
 
